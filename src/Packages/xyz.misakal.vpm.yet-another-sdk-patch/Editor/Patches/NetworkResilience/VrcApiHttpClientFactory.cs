@@ -54,6 +54,7 @@ internal sealed class VrcApiHttpClientFactory
         }
     }
 
+    private readonly object _lock = new();
     private readonly HttpClient _client;
     private readonly CookieContainer _cookieContainer;
 
@@ -65,14 +66,22 @@ internal sealed class VrcApiHttpClientFactory
         _client = CreateClientInternal(_cookieContainer);
     }
 
+    // Exposes the underlying HttpClient instance without mutating any shared state, so callers
+    // that only need to compare the client reference (e.g. to identify which client an HttpClient
+    // instance belongs to) don't trigger cookie/header refreshes as a side effect.
+    public HttpClient Client => _client;
+
     public HttpClient GetOrCreateClient()
     {
-        _cookieContainer.Clear();
-        _setupCookieContainer(_cookieContainer);
+        lock (_lock)
+        {
+            _cookieContainer.Clear();
+            _setupCookieContainer(_cookieContainer);
 
-        UpdateMacAddressHeader(_client);
+            UpdateMacAddressHeader(_client);
 
-        return _client;
+            return _client;
+        }
     }
 
     private static void UpdateMacAddressHeader(HttpClient client)
