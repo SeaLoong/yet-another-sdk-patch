@@ -17,18 +17,24 @@ internal sealed class VrcApiHttpClientFactory
 
     private static readonly YesLogger Logger = new(nameof(VrcApiHttpClientFactory));
 
+    private const string MacAddressHeaderName = "X-MacAddress";
+
     private readonly SetupCookieContainerGetCookiesDelegate _setupCookieContainer;
 
     private readonly Dictionary<string, string> _defaultRequestHeaders = new()
     {
         { "User-Agent", "VRC.Core.BestHTTP" },
-        { "X-MacAddress", GetDeviceIdSafe() },
         { "X-SDK-Version", Tools.SdkVersion },
         { "X-Platform", Tools.Platform },
         { "X-Unity-Version", Application.unityVersion },
         { "Accept", "application/json" }
     };
 
+    // API.DeviceID is deliberately not read eagerly (e.g. as a field initializer). VRC.Core.API's
+    // internal state may not be fully initialized yet when this factory is constructed during patch
+    // application, which can cause API.DeviceID to throw a NullReferenceException. Instead, the value
+    // is looked up lazily, right before it is actually needed (see GetOrCreateClient below), with
+    // exception protection and a safe fallback.
     private static string GetDeviceIdSafe()
     {
         try
@@ -61,7 +67,17 @@ internal sealed class VrcApiHttpClientFactory
         _cookieContainer.Clear();
         _setupCookieContainer(_cookieContainer);
 
+        UpdateMacAddressHeader(_client);
+
         return _client;
+    }
+
+    private static void UpdateMacAddressHeader(HttpClient client)
+    {
+        // Refresh the device id right before the client is handed out, rather than once at
+        // construction time, so a transient failure to read it doesn't permanently affect the client.
+        client.DefaultRequestHeaders.Remove(MacAddressHeaderName);
+        client.DefaultRequestHeaders.Add(MacAddressHeaderName, GetDeviceIdSafe());
     }
 
     private HttpClient CreateClientInternal(CookieContainer cookieContainer)
