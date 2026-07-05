@@ -33,21 +33,24 @@ internal sealed class VrcApiHttpClientFactory
     // API.DeviceID is deliberately not read eagerly (e.g. as a field initializer). VRC.Core.API's
     // internal state may not be fully initialized yet when this factory is constructed during patch
     // application, which can cause API.DeviceID to throw a NullReferenceException. Instead, the value
-    // is looked up lazily, right before it is actually needed (see GetOrCreateClient below), with
-    // exception protection and a safe fallback.
-    private static string GetDeviceIdSafe()
+    // is looked up lazily, right before it is actually needed (see GetOrCreateClient below), and it is
+    // re-fetched every time so the header always reflects the real, current device id.
+    private static bool TryGetDeviceId(out string deviceId)
     {
         try
         {
-            return API.DeviceID;
+            deviceId = API.DeviceID;
+            return true;
         }
         catch (Exception ex)
         {
             // VRC.Core.API.DeviceID can throw a NullReferenceException when accessed too early
-            // (e.g. before VRChat's internal API state has finished initializing). Fall back to
-            // a random identifier so this doesn't prevent the patch from being applied.
-            Logger.LogWarning(ex, "Failed to get VRC.Core.API.DeviceID, falling back to a random device ID.");
-            return Guid.NewGuid().ToString();
+            // (e.g. before VRChat's internal API state has finished initializing). Don't substitute
+            // a made-up value here, as that would be incorrect; just skip the header for this
+            // request and try again the next time a client is requested.
+            Logger.LogWarning(ex, "Failed to get VRC.Core.API.DeviceID, skipping the X-MacAddress header for this request.");
+            deviceId = string.Empty;
+            return false;
         }
     }
 
@@ -75,9 +78,14 @@ internal sealed class VrcApiHttpClientFactory
     private static void UpdateMacAddressHeader(HttpClient client)
     {
         // Refresh the device id right before the client is handed out, rather than once at
-        // construction time, so a transient failure to read it doesn't permanently affect the client.
+        // construction time, so a transient failure to read it doesn't permanently affect the client,
+        // and the header always carries the real, up-to-date device id when it's available.
         client.DefaultRequestHeaders.Remove(MacAddressHeaderName);
-        client.DefaultRequestHeaders.Add(MacAddressHeaderName, GetDeviceIdSafe());
+
+        if (TryGetDeviceId(out var deviceId))
+        {
+            client.DefaultRequestHeaders.Add(MacAddressHeaderName, deviceId);
+        }
     }
 
     private HttpClient CreateClientInternal(CookieContainer cookieContainer)
