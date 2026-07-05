@@ -6,6 +6,7 @@ using System.Threading;
 using UnityEngine;
 using VRC;
 using VRC.Core;
+using YesPatchFrameworkForVRChatSdk.PatchApi.Logging;
 using YetAnotherPatchForVRChatSdk.Extensions;
 
 namespace YetAnotherPatchForVRChatSdk.Patches.NetworkResilience;
@@ -14,17 +15,35 @@ internal sealed class VrcApiHttpClientFactory
 {
     public delegate void SetupCookieContainerGetCookiesDelegate(CookieContainer cookieContainer);
 
+    private static readonly YesLogger Logger = new(nameof(VrcApiHttpClientFactory));
+
     private readonly SetupCookieContainerGetCookiesDelegate _setupCookieContainer;
 
     private readonly Dictionary<string, string> _defaultRequestHeaders = new()
     {
         { "User-Agent", "VRC.Core.BestHTTP" },
-        { "X-MacAddress", API.DeviceID },
+        { "X-MacAddress", GetDeviceIdSafe() },
         { "X-SDK-Version", Tools.SdkVersion },
         { "X-Platform", Tools.Platform },
         { "X-Unity-Version", Application.unityVersion },
         { "Accept", "application/json" }
     };
+
+    private static string GetDeviceIdSafe()
+    {
+        try
+        {
+            return API.DeviceID;
+        }
+        catch (Exception ex)
+        {
+            // VRC.Core.API.DeviceID can throw a NullReferenceException when accessed too early
+            // (e.g. before VRChat's internal API state has finished initializing). Fall back to
+            // a random identifier so this doesn't prevent the patch from being applied.
+            Logger.LogWarning(ex, "Failed to get VRC.Core.API.DeviceID, falling back to a random device ID.");
+            return Guid.NewGuid().ToString();
+        }
+    }
 
     private readonly HttpClient _client;
     private readonly CookieContainer _cookieContainer;
