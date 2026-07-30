@@ -5,8 +5,6 @@ using System.Net.Http;
 using System.Threading;
 using UnityEngine;
 using VRC;
-using VRC.Core;
-using YetAnotherPatchForVRChatSdk.Extensions;
 
 namespace YetAnotherPatchForVRChatSdk.Patches.NetworkResilience;
 
@@ -19,45 +17,65 @@ internal sealed class VrcApiHttpClientFactory
     private readonly Dictionary<string, string> _defaultRequestHeaders = new()
     {
         { "User-Agent", "VRC.Core.BestHTTP" },
-        { "X-MacAddress", API.DeviceID },
         { "X-SDK-Version", Tools.SdkVersion },
         { "X-Platform", Tools.Platform },
         { "X-Unity-Version", Application.unityVersion },
         { "Accept", "application/json" }
     };
 
+    private readonly object _lock = new();
+    private readonly CookieHeaderHandler _cookieHeaderHandler;
     private readonly HttpClient _client;
-    private readonly CookieContainer _cookieContainer;
 
     public VrcApiHttpClientFactory(SetupCookieContainerGetCookiesDelegate? setupCookieContainer = null)
     {
         _setupCookieContainer = setupCookieContainer ?? (_ => { });
 
-        _cookieContainer = new CookieContainer();
-        _client = CreateClientInternal(_cookieContainer);
-    }
-
-    public HttpClient GetOrCreateClient()
-    {
-        _cookieContainer.Clear();
-        _setupCookieContainer(_cookieContainer);
-
-        return _client;
-    }
-
-    private HttpClient CreateClientInternal(CookieContainer cookieContainer)
-    {
-        _setupCookieContainer(cookieContainer);
-
+        var cookieContainer = CreateCookieContainer();
         var innerHandler = new StandardSocketsHttpHandler
         {
-            CookieContainer = cookieContainer,
+            // CookieHeaderHandler owns the CookieContainer state and applies request/response
+            // cookies under a per-generation lock. The underlying handler must not mutate it too.
+            UseCookies = false,
             Proxy = new NetworkResilienceWebProxy(),
             ConnectTimeout = TimeSpan.FromSeconds(5),
             PooledConnectionIdleTimeout = TimeSpan.Zero
         };
 
-        var handler = new ResilienceHttpHandler(new HttpLoggingHandler(innerHandler));
+        _cookieHeaderHandler = new CookieHeaderHandler(cookieContainer, innerHandler);
+        _client = CreateClientInternal(_cookieHeaderHandler);
+    }
+
+    // Exposes the underlying HttpClient instance without mutating any shared state, so callers
+    // that only need to compare the client reference (e.g. to identify which client an HttpClient
+    // instance belongs to) don't trigger cookie/header refreshes as a side effect.
+    public HttpClient Client => _client;
+
+    public HttpClient GetOrCreateClient()
+    {
+        lock (_lock)
+        {
+            // Copy cookies received by the current generation before applying the latest SDK
+            // credentials. Publish the new generation only after it is fully configured; requests
+            // already in flight keep using and updating the old generation safely.
+            var cookieContainer = _cookieHeaderHandler.CreateCookieContainerSnapshot();
+            _setupCookieContainer(cookieContainer);
+            _cookieHeaderHandler.SetCookieContainer(cookieContainer);
+
+            return _client;
+        }
+    }
+
+    private CookieContainer CreateCookieContainer()
+    {
+        var cookieContainer = new CookieContainer();
+        _setupCookieContainer(cookieContainer);
+        return cookieContainer;
+    }
+
+    private HttpClient CreateClientInternal(HttpMessageHandler innerHandler)
+    {
+        var handler = new ResilienceHttpHandler(new MacAddressHeaderHandler(new HttpLoggingHandler(innerHandler)));
         var client = new HttpClient(handler);
         client.Timeout = Timeout.InfiniteTimeSpan;
 
