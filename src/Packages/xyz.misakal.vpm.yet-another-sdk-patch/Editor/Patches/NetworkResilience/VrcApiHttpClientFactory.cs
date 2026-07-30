@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Threading;
@@ -63,7 +64,7 @@ internal sealed class VrcApiHttpClientFactory
             PooledConnectionIdleTimeout = TimeSpan.Zero
         };
 
-        var handler = new MacAddressHeaderHandler(new ResilienceHttpHandler(new HttpLoggingHandler(innerHandler)));
+        var handler = new ResilienceHttpHandler(new MacAddressHeaderHandler(new HttpLoggingHandler(innerHandler)));
         var client = new HttpClient(handler);
         client.Timeout = Timeout.InfiniteTimeSpan;
 

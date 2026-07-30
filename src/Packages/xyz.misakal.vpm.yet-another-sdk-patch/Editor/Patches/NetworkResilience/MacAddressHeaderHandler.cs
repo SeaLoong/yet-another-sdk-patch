@@ -26,10 +26,11 @@ internal sealed class MacAddressHeaderHandler : DelegatingHandler
         HttpRequestMessage request,
         CancellationToken cancellationToken)
     {
+        request.Headers.Remove(MacAddressHeaderName);
+
         if (TryGetDeviceId(out var deviceId))
         {
-            request.Headers.Remove(MacAddressHeaderName);
-            request.Headers.Add(MacAddressHeaderName, deviceId);
+            request.Headers.TryAddWithoutValidation(MacAddressHeaderName, deviceId);
         }
 
         return base.SendAsync(request, cancellationToken);
